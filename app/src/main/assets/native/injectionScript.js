@@ -2,6 +2,7 @@
     const scripts = [
         '/native/nativeshell.js',
         '/native/EventEmitter.js',
+        '/native/downloadsTab.js',
         document.currentScript.src.concat('?deferred=true&ts=', Date.now())
     ];
     for (const script of scripts) {

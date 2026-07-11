@@ -1,6 +1,7 @@
 package org.jellyfin.mobile.downloads
 
 import android.content.Context
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
@@ -11,6 +12,7 @@ import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import java.util.concurrent.TimeUnit
 import org.jellyfin.mobile.app.AppPreferences
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
@@ -21,11 +23,13 @@ class DownloadWorker(
 ) : CoroutineWorker(context, parameters), KoinComponent {
     companion object {
         private val tag = DownloadWorker::class.qualifiedName!!
+        private const val RETRY_BACKOFF_SECONDS = 30L
 
         fun start(context: Context, appPreferences: AppPreferences) {
             val request = OneTimeWorkRequestBuilder<DownloadWorker>().apply {
                 addTag(tag)
                 setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                setBackoffCriteria(BackoffPolicy.EXPONENTIAL, RETRY_BACKOFF_SECONDS, TimeUnit.SECONDS)
                 setConstraints(
                     Constraints.Builder().apply {
                         when (appPreferences.downloadMethod) {
@@ -57,11 +61,13 @@ class DownloadWorker(
 
     override suspend fun doWork(): Result {
         val canProcess = downloadQueue.prepare()
-        if (!canProcess) return Result.failure()
+        if (!canProcess) return Result.success()
 
         setForeground(getForegroundInfo())
-        downloadQueue.process()
+        val hasPendingRetries = downloadQueue.process()
 
-        return Result.success()
+        // Reschedule (with WorkManager back-off + network constraint) when downloads failed
+        // transiently, so they resume automatically once conditions allow.
+        return if (hasPendingRetries) Result.retry() else Result.success()
     }
 }

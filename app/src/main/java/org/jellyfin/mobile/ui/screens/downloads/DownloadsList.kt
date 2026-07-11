@@ -49,6 +49,7 @@ fun DownloadsList(
     onDownload: (DownloadEntity) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues.Zero,
+    progress: Map<Long, Int> = emptyMap(),
     selection: Set<Long> = emptySet(),
     onToggleSelection: (DownloadEntity) -> Unit = {},
 ) {
@@ -64,6 +65,7 @@ fun DownloadsList(
         ) { downloadFiles ->
             DownloadItem(
                 downloadFiles = downloadFiles,
+                percent = progress[downloadFiles.download.id],
                 onOpen = { onOpen(downloadFiles.download) },
                 onDownload = { onDownload(downloadFiles.download) },
                 onToggleSelection = { onToggleSelection(downloadFiles.download) },
@@ -82,6 +84,7 @@ fun DownloadItem(
     onDownload: () -> Unit,
     onToggleSelection: () -> Unit,
     modifier: Modifier = Modifier,
+    percent: Int? = null,
     isSelected: Boolean = false,
     selectionMode: Boolean = false,
 ) {
@@ -147,7 +150,18 @@ fun DownloadItem(
             }
         },
         secondaryText = {
-            if (download.status == DownloadStatus.DOWNLOADING || download.status == DownloadStatus.QUEUED) {
+            if (download.status == DownloadStatus.DOWNLOADING && percent != null && percent > 0) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LinearProgressIndicator(
+                        progress = percent / 100f,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = "$percent%",
+                        modifier = Modifier.padding(start = 8.dp),
+                    )
+                }
+            } else if (download.status == DownloadStatus.DOWNLOADING || download.status == DownloadStatus.QUEUED) {
                 LinearProgressIndicator()
             } else if (isVerified) {
                 Text(

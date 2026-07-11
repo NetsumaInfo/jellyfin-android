@@ -28,11 +28,15 @@ class DownloadsViewModel : ViewModel(), KoinComponent {
     private val downloadManager: DownloadManager by inject()
     private val activityEventHandler: ActivityEventHandler by inject()
     private val storageManager: StorageManager by inject()
+    private val progressStore: DownloadProgressStore by inject()
 
     val downloads: StateFlow<List<DownloadFiles>> = downloadDao
         .getAllDownloadsWithFiles()
         .flowOn(Dispatchers.IO)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyList())
+
+    /** Live download progress (download id -> percent 0-100) for items currently downloading. */
+    val progress: StateFlow<Map<Long, Int>> = progressStore.progress
 
     private val _storageLocation = MutableStateFlow(storageManager.getStorageLocation())
     val storageLocation = _storageLocation.asStateFlow()

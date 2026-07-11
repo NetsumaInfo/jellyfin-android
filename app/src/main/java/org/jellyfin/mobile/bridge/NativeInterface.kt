@@ -6,10 +6,17 @@ import android.content.Intent
 import android.media.session.PlaybackState
 import android.webkit.JavascriptInterface
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import org.jellyfin.mobile.BuildConfig
+import org.jellyfin.mobile.app.StorageManager
+import org.jellyfin.mobile.data.dao.DownloadDao
+import org.jellyfin.mobile.downloads.DownloadManager
+import org.jellyfin.mobile.downloads.DownloadProgressStore
 import org.jellyfin.mobile.events.ActivityEvent
 import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.player.deviceprofile.DeviceProfileBuilder
+import org.jellyfin.mobile.player.interaction.PlayOptions
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.Constants.EXTRA_ALBUM
 import org.jellyfin.mobile.utils.Constants.EXTRA_ARTIST
@@ -27,6 +34,7 @@ import org.jellyfin.mobile.webapp.RemoteVolumeProvider
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.util.AuthorizationHeaderBuilder
 import org.jellyfin.sdk.model.serializer.toUUID
+import org.jellyfin.sdk.model.serializer.toUUIDOrNull
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -157,6 +165,96 @@ class NativeInterface(private val context: Context) : KoinComponent {
     @JavascriptInterface
     fun openDownloadManager() {
         emitEvent(ActivityEvent.OpenDownloads)
+    }
+
+    /**
+     * Expose the current downloads (with live status/progress) to the web UI so it can render
+     * them as an in-app page instead of a separate native screen.
+     */
+    @JavascriptInterface
+    fun getDownloads(): String = try {
+        val downloadDao: DownloadDao = get()
+        val storageManager: StorageManager = get()
+        val progressStore: DownloadProgressStore = get()
+        val progress = progressStore.progress.value
+
+        val downloads = runBlocking { downloadDao.getAllDownloadsWithFiles().first() }
+        JSONArray().apply {
+            downloads.forEach { downloadFiles ->
+                put(
+                    JSONObject().apply {
+                        val item = downloadFiles.download.item
+                        put("id", downloadFiles.download.id)
+                        put("itemId", downloadFiles.download.itemId.toString())
+                        put("name", downloadFiles.download.getDisplayName(context))
+                        put("status", downloadFiles.download.status.name)
+                        put("percent", progress[downloadFiles.download.id] ?: -1)
+                        put("verified", storageManager.verify(downloadFiles))
+                        put("type", item.type.name)
+                        put("seriesId", item.seriesId?.toString().orEmpty())
+                        put("seriesName", item.seriesName.orEmpty())
+                        put("season", item.parentIndexNumber ?: -1)
+                        put("episode", item.indexNumber ?: -1)
+                        put("size", downloadFiles.files.sumOf { file -> file.size })
+                    },
+                )
+            }
+        }.toString()
+    } catch (e: Exception) {
+        Timber.e(e, "getDownloads failed")
+        "[]"
+    }
+
+    /**
+     * Re-queue a download that failed or is incomplete, resuming from the partial file.
+     */
+    @JavascriptInterface
+    fun retryDownload(id: Long) {
+        try {
+            val downloadDao: DownloadDao = get()
+            val downloadManager: DownloadManager = get()
+            runBlocking {
+                downloadDao.getDownload(id)?.let { download -> downloadManager.resume(download) }
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "retryDownload failed")
+        }
+    }
+
+    /**
+     * Delete one or more downloads (by download id) and their local files.
+     */
+    @JavascriptInterface
+    fun deleteDownloads(idsJson: String) {
+        try {
+            val ids = JSONArray(idsJson)
+            val downloadManager: DownloadManager = get()
+            runBlocking {
+                for (index in 0 until ids.length()) {
+                    downloadManager.delete(ids.getLong(index), deleteFiles = true)
+                }
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "deleteDownloads failed")
+        }
+    }
+
+    /**
+     * Play a downloaded item in the native player (in-app), reading from local storage.
+     */
+    @JavascriptInterface
+    fun playDownload(itemId: String) {
+        val id = itemId.toUUIDOrNull() ?: return
+        val playOptions = PlayOptions(
+            ids = listOf(id),
+            mediaSourceId = id.toString(),
+            startIndex = 0,
+            startPosition = null,
+            audioStreamIndex = null,
+            subtitleStreamIndex = null,
+            playFromDownloads = true,
+        )
+        emitEvent(ActivityEvent.LaunchNativePlayer(playOptions))
     }
 
     @JavascriptInterface

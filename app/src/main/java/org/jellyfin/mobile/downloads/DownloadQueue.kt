@@ -16,6 +16,15 @@ import org.jellyfin.sdk.api.client.extensions.imageApi
 import org.jellyfin.sdk.api.client.extensions.libraryApi
 import org.jellyfin.sdk.model.api.ImageFormat
 import org.jellyfin.sdk.model.api.ImageType
+import timber.log.Timber
+import java.io.IOException
+
+private enum class ProcessResult {
+    SUCCESS,
+    TRANSIENT_FAILURE,
+    PERMANENT_FAILURE,
+    CANCELLED,
+}
 
 class DownloadQueue(
     private val context: Context,
@@ -23,8 +32,13 @@ class DownloadQueue(
     private val downloadDao: DownloadDao,
     private val downloadNotificationManager: DownloadNotificationManager,
     private val storageManager: StorageManager,
+    private val progressStore: DownloadProgressStore,
     okHttpClient: OkHttpClient,
 ) {
+    private companion object {
+        const val PERCENT_MAX = 100
+    }
+
     private data class QueuedFile(val file: DownloadFileEntity, val remoteUri: Uri)
 
     private val _downloader = FileDownloader(okHttpClient)
@@ -37,44 +51,90 @@ class DownloadQueue(
         return _downloads.any()
     }
 
-    suspend fun process() {
-        while (_downloads.any()) {
-            val iterator = _downloads.iterator()
-            while (iterator.hasNext()) {
-                val downloadWithFiles = iterator.next()
-                process(downloadWithFiles)
-                iterator.remove()
-            }
+    /**
+     * Process all queued downloads. A single item failing no longer aborts the whole queue.
+     *
+     * @return true if one or more downloads failed transiently (e.g. network loss) and the
+     * worker should be rescheduled to retry them later.
+     */
+    suspend fun process(): Boolean {
+        val failedThisRun = mutableSetOf<Long>()
+        var hasPendingRetries = false
 
-            // Refetch the queued downloads
+        while (true) {
             prepare()
+            // Skip items that already failed transiently this run to avoid a hot retry loop;
+            // they stay QUEUED and are retried on the next (back-off delayed) worker run.
+            val pending = _downloads.filter { it.download.id !in failedThisRun }
+            if (pending.isEmpty()) break
+
+            for (downloadWithFiles in pending) {
+                when (process(downloadWithFiles)) {
+                    ProcessResult.SUCCESS,
+                    ProcessResult.PERMANENT_FAILURE,
+                    -> Unit
+                    ProcessResult.TRANSIENT_FAILURE -> {
+                        failedThisRun += downloadWithFiles.download.id
+                        hasPendingRetries = true
+                    }
+                    ProcessResult.CANCELLED -> return hasPendingRetries
+                }
+            }
         }
+
+        return hasPendingRetries
     }
 
-    private suspend fun process(downloadWithFiles: DownloadFiles) {
+    private suspend fun process(downloadWithFiles: DownloadFiles): ProcessResult {
         // Mark as downloading
         downloadDao.update(downloadWithFiles.download.copy(status = DownloadStatus.DOWNLOADING))
         val api = apiClientController.getApiClient(downloadWithFiles.download.serverId, downloadWithFiles.download.userId)
 
+        val downloadId = downloadWithFiles.download.id
         try {
             val queuedFiles = prepareFiles(api, downloadWithFiles)
 
             val notificationProgressCallback = downloadNotificationManager.downloadFile(
-                downloadWithFiles.download.id,
+                downloadId,
                 downloadWithFiles.download.getDisplayName(context).orEmpty(),
             )
 
+            // Forward progress both to the notification and the in-app progress store
+            val progressCallback = FileDownloader.ProgressCallback { downloaded, total ->
+                notificationProgressCallback.onProgress(downloaded, total)
+                val percent = if (total > 0) {
+                    (downloaded.toFloat() / total.toFloat() * PERCENT_MAX).toInt().coerceIn(0, PERCENT_MAX)
+                } else {
+                    0
+                }
+                progressStore.update(downloadId, percent)
+            }
+
             for (queuedFile in queuedFiles) {
-                download(api, queuedFile, notificationProgressCallback)
+                download(api, queuedFile, progressCallback)
             }
 
             notificationProgressCallback.onEnd()
+            progressStore.clear(downloadId)
             downloadDao.update(downloadWithFiles.download.copy(status = DownloadStatus.DOWNLOADED))
+            return ProcessResult.SUCCESS
         } catch (_: CancellationException) {
+            // Worker was stopped: keep the item queued so it resumes next time.
+            progressStore.clear(downloadId)
             downloadDao.update(downloadWithFiles.download.copy(status = DownloadStatus.QUEUED))
+            return ProcessResult.CANCELLED
+        } catch (error: IOException) {
+            // Network / IO problem: keep queued and retry later (partial file resumes via HTTP Range).
+            Timber.w(error, "Transient download failure for id %d, will retry", downloadId)
+            progressStore.clear(downloadId)
+            downloadDao.update(downloadWithFiles.download.copy(status = DownloadStatus.QUEUED))
+            return ProcessResult.TRANSIENT_FAILURE
         } catch (error: Throwable) {
+            // Unexpected/permanent problem: mark as errored but keep processing the rest of the queue.
+            Timber.e(error, "Permanent download failure for id %d", downloadId)
+            progressStore.clear(downloadId)
             downloadDao.update(downloadWithFiles.download.copy(status = DownloadStatus.ERROR))
-            throw error
+            return ProcessResult.PERMANENT_FAILURE
         }
     }
 
@@ -87,8 +147,7 @@ class DownloadQueue(
 
         // Verify downloaded files and skip if valid
         if (file.status == DownloadStatus.DOWNLOADED && file.size > 0) {
-            val documentFile = DocumentFile.fromSingleUri(context, file.uri)
-            if (documentFile?.exists() == true && documentFile.length() == file.size) return
+            if (storageManager.fileExists(file.uri) && storageManager.fileLength(file.uri) == file.size) return
         }
 
         val fileDescriptor = context.contentResolver.openFileDescriptor(file.uri, "rw")
@@ -107,7 +166,7 @@ class DownloadQueue(
             // Update file record with final size and status
             downloadDao.updateFile(
                 file.copy(
-                    size = DocumentFile.fromSingleUri(context, file.uri)?.length() ?: 0L,
+                    size = storageManager.fileLength(file.uri),
                     status = DownloadStatus.DOWNLOADED,
                 ),
             )

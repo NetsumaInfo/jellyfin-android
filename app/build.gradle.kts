@@ -30,6 +30,9 @@ android {
     namespace = "org.jellyfin.mobile"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
 
+    // Pin to a locally complete NDK (28.2 install is missing llvm-strip on this machine)
+    ndkVersion = "27.1.12297006"
+
     defaultConfig {
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()

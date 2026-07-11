@@ -60,6 +60,7 @@ fun DownloadsScreen(
     onBackPressed: () -> Unit = {},
 ) {
     val downloads by viewModel.downloads.collectAsState()
+    val progress by viewModel.progress.collectAsState()
     val storageLocation by viewModel.storageLocation.collectAsState()
     val storageLocationAccessible by viewModel.storageLocationAccessible.collectAsState()
     val selection = remember { mutableStateSetOf<Long>() }
@@ -227,6 +228,7 @@ fun DownloadsScreen(
                 } else {
                     DownloadsList(
                         downloads = downloads,
+                        progress = progress,
                         onOpen = { viewModel.openDownload(it) },
                         onDownload = { viewModel.download(it) },
                         selection = selection,
