@@ -8,6 +8,12 @@ sealed class ActivityEvent {
     class ChangeFullscreen(val isFullscreen: Boolean) : ActivityEvent()
     class LaunchNativePlayer(val playOptions: PlayOptions) : ActivityEvent()
     class OpenUrl(val uri: String, val grantReadPermission: Boolean = false) : ActivityEvent()
+
+    /**
+     * Play a downloaded file in the configured external player (e.g. VLC, MX Player).
+     * [uri] must be shareable with other apps (a content:// uri, not file://).
+     */
+    class PlayDownloadExternally(val uri: String, val title: String) : ActivityEvent()
     class DownloadItems(val itemIds: Collection<UUID>) : ActivityEvent()
     class CastMessage(val action: String, val args: JSONArray) : ActivityEvent()
     data object RequestBluetoothPermission : ActivityEvent()

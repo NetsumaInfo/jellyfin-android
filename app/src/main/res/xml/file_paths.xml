@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- App-specific download folder, shared with external players via content:// uris -->
+    <external-files-path
+        name="downloads"
+        path="Downloads/" />
+    <files-path
+        name="internal_downloads"
+        path="Downloads/" />
+</paths>

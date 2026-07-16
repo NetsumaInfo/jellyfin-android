@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
+import androidx.core.content.FileProvider
 import androidx.core.net.toFile
 import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
@@ -88,6 +89,20 @@ class StorageManager(
         runCatching { uri.toFile().length() }.getOrDefault(0L)
     } else {
         DocumentFile.fromSingleUri(context, uri)?.length() ?: 0L
+    }
+
+    /**
+     * Turn a downloaded file uri into one that can be handed to another app (e.g. an external player).
+     * Files in the app-specific folder use file:// uris, which other apps are not allowed to read,
+     * so they are exposed through the FileProvider instead.
+     */
+    fun getShareableUri(uri: Uri): Uri? = when (uri.scheme) {
+        ContentResolver.SCHEME_FILE -> runCatching {
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", uri.toFile())
+        }.onFailure { error ->
+            Timber.e(error, "Failed to expose %s through the FileProvider", uri)
+        }.getOrNull()
+        else -> uri
     }
 
     /**

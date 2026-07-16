@@ -9,14 +9,17 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.jellyfin.mobile.BuildConfig
+import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.app.StorageManager
 import org.jellyfin.mobile.data.dao.DownloadDao
+import org.jellyfin.mobile.downloads.DownloadFileType
 import org.jellyfin.mobile.downloads.DownloadManager
 import org.jellyfin.mobile.downloads.DownloadProgressStore
 import org.jellyfin.mobile.events.ActivityEvent
 import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.player.deviceprofile.DeviceProfileBuilder
 import org.jellyfin.mobile.player.interaction.PlayOptions
+import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.Constants.EXTRA_ALBUM
 import org.jellyfin.mobile.utils.Constants.EXTRA_ARTIST
@@ -240,11 +243,14 @@ class NativeInterface(private val context: Context) : KoinComponent {
     }
 
     /**
-     * Play a downloaded item in the native player (in-app), reading from local storage.
+     * Play a downloaded item from local storage, honouring the configured video player type
+     * (native player by default, or an external app such as VLC).
      */
     @JavascriptInterface
     fun playDownload(itemId: String) {
         val id = itemId.toUUIDOrNull() ?: return
+        if (playDownloadExternally(id)) return
+
         val playOptions = PlayOptions(
             ids = listOf(id),
             mediaSourceId = id.toString(),
@@ -255,6 +261,34 @@ class NativeInterface(private val context: Context) : KoinComponent {
             playFromDownloads = true,
         )
         emitEvent(ActivityEvent.LaunchNativePlayer(playOptions))
+    }
+
+    /**
+     * @return true if the item was handed to an external player, false to fall back to the native one.
+     */
+    private fun playDownloadExternally(itemId: UUID): Boolean {
+        val appPreferences: AppPreferences = get()
+        if (appPreferences.videoPlayerType != VideoPlayerType.EXTERNAL_PLAYER) return false
+
+        return try {
+            val downloadDao: DownloadDao = get()
+            val storageManager: StorageManager = get()
+            runBlocking {
+                val download = downloadDao.getDownloadByItemId(itemId) ?: return@runBlocking false
+                val file = downloadDao.getFiles(download.id)
+                    .find { downloadFile -> downloadFile.type == DownloadFileType.ITEM }
+                    ?: return@runBlocking false
+                val uri = storageManager.getShareableUri(file.uri) ?: return@runBlocking false
+
+                emitEvent(
+                    ActivityEvent.PlayDownloadExternally(uri.toString(), download.getDisplayName(context).orEmpty()),
+                )
+                true
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to hand download to external player")
+            false
+        }
     }
 
     @JavascriptInterface

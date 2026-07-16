@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import org.jellyfin.mobile.MainActivity
 import org.jellyfin.mobile.R
+import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.bridge.JavascriptCallback
 import org.jellyfin.mobile.downloads.DownloadsFragment
 import org.jellyfin.mobile.player.ui.PlayerFragment
@@ -20,8 +21,11 @@ import org.jellyfin.mobile.player.ui.PlayerFullscreenHelper
 import org.jellyfin.mobile.settings.SettingsFragment
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.extensions.addFragment
+import org.jellyfin.mobile.utils.isPackageInstalled
 import org.jellyfin.mobile.utils.requestDownload
+import org.jellyfin.mobile.utils.toast
 import org.jellyfin.mobile.webapp.WebappFunctionChannel
+import org.koin.android.ext.android.get
 import timber.log.Timber
 
 class ActivityEventHandler(
@@ -72,6 +76,24 @@ class ActivityEventHandler(
                     startActivity(intent)
                 } catch (e: ActivityNotFoundException) {
                     Timber.e("openIntent: %s", e.message)
+                }
+            }
+            is ActivityEvent.PlayDownloadExternally -> {
+                val appPreferences: AppPreferences = get()
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(event.uri.toUri(), "video/*")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    if (packageManager.isPackageInstalled(appPreferences.externalPlayerApp)) {
+                        `package` = appPreferences.externalPlayerApp
+                    }
+                    putExtra("title", event.title)
+                    putExtra("return_result", true)
+                }
+                try {
+                    startActivity(intent)
+                } catch (e: ActivityNotFoundException) {
+                    Timber.e(e, "No external player found for downloaded item")
+                    toast(R.string.external_player_invalid_player)
                 }
             }
             is ActivityEvent.DownloadItems -> {

@@ -1,5 +1,6 @@
 package org.jellyfin.mobile.downloads
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.app.StorageManager
 import org.jellyfin.mobile.data.dao.DownloadDao
 import org.jellyfin.mobile.data.entity.DownloadEntity
@@ -18,12 +20,15 @@ import org.jellyfin.mobile.data.entity.DownloadFiles
 import org.jellyfin.mobile.events.ActivityEvent
 import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.player.interaction.PlayOptions
+import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.sdk.model.api.MediaType
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 
 class DownloadsViewModel : ViewModel(), KoinComponent {
 
+    private val context: Context by inject()
+    private val appPreferences: AppPreferences by inject()
     private val downloadDao: DownloadDao by inject()
     private val downloadManager: DownloadManager by inject()
     private val activityEventHandler: ActivityEventHandler by inject()
@@ -46,7 +51,10 @@ class DownloadsViewModel : ViewModel(), KoinComponent {
 
     fun openDownload(download: DownloadEntity) {
         when (download.item.mediaType) {
-            MediaType.VIDEO -> {
+            MediaType.VIDEO -> viewModelScope.launch {
+                // Honour the configured video player type, like online playback does
+                if (playExternally(download)) return@launch
+
                 val playOptions = PlayOptions(
                     ids = listOf(download.itemId),
                     mediaSourceId = download.itemId.toString(),
@@ -79,6 +87,24 @@ class DownloadsViewModel : ViewModel(), KoinComponent {
                 }
             }
         }
+    }
+
+    /**
+     * @return true if the download was handed to an external player, false to use the native one.
+     */
+    private suspend fun playExternally(download: DownloadEntity): Boolean {
+        if (appPreferences.videoPlayerType != VideoPlayerType.EXTERNAL_PLAYER) return false
+
+        val uri = withContext(Dispatchers.IO) {
+            downloadDao.getFiles(download.id)
+                .find { file -> file.type == DownloadFileType.ITEM }
+                ?.let { file -> storageManager.getShareableUri(file.uri) }
+        } ?: return false
+
+        activityEventHandler.emit(
+            ActivityEvent.PlayDownloadExternally(uri.toString(), download.getDisplayName(context).orEmpty()),
+        )
+        return true
     }
 
     fun download(download: DownloadEntity) {

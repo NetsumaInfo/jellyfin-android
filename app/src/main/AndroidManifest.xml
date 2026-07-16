@@ -96,6 +96,17 @@
             android:grantUriPermissions="true"
             android:readPermission="android.permission.MEDIA_CONTENT_CONTROL" />
 
+        <!-- Shares downloaded files with external players, which cannot read file:// uris -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <receiver android:name="org.jellyfin.mobile.downloads.DownloadBroadcastReceiver" />
 
         <meta-data
