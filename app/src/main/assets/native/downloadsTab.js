@@ -54,6 +54,30 @@
         try { return JSON.parse(window.NativeInterface.getDownloads()); } catch (e) { return []; }
     }
 
+    function videoPlayerType() {
+        try { return window.NativeInterface.getVideoPlayerType(); } catch (e) { return 'exoplayer'; }
+    }
+
+    // Hand playback to the same player online playback uses.
+    // The web player has no offline support, so it goes through jellyfin-web's own
+    // playbackManager (which streams from the server); the other types read the local file.
+    function playItem(d) {
+        if (videoPlayerType() === 'webui') {
+            try {
+                var pm = window.NavigationHelper && window.NavigationHelper.playbackManager;
+                var api = apiClient();
+                // playbackManager rejects with "serverId required!" without it
+                var serverId = api && typeof api.serverId === 'function' ? api.serverId() : null;
+                if (pm && typeof pm.play === 'function' && serverId) {
+                    hide();
+                    pm.play({ ids: [d.itemId], serverId: serverId });
+                    return;
+                }
+            } catch (e) { /* fall through to the native player */ }
+        }
+        try { window.NativeInterface.playDownload(d.itemId); } catch (e) { /* ignore */ }
+    }
+
     function formatSize(bytes) {
         if (!bytes || bytes <= 0) return '';
         var units = ['o', 'Ko', 'Mo', 'Go', 'To'];
@@ -313,7 +337,7 @@
             if (fired.v) { fired.v = false; return; }
             if (selectionMode) { toggleSelect([d.id]); return; }
             if (isPlayable(d)) {
-                try { window.NativeInterface.playDownload(d.itemId); } catch (e) { /* ignore */ }
+                playItem(d);
             } else if (isRetryable(d)) {
                 try { window.NativeInterface.retryDownload(d.id); } catch (e) { /* ignore */ }
                 setTimeout(render, 300);

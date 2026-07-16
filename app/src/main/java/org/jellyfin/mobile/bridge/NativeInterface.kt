@@ -243,6 +243,13 @@ class NativeInterface(private val context: Context) : KoinComponent {
     }
 
     /**
+     * The configured video player type, so the web UI can route downloads to the same player
+     * that online playback uses.
+     */
+    @JavascriptInterface
+    fun getVideoPlayerType(): String = get<AppPreferences>().videoPlayerType
+
+    /**
      * Play a downloaded item from local storage, honouring the configured video player type
      * (native player by default, or an external app such as VLC).
      */
