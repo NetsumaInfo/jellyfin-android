@@ -87,11 +87,14 @@ class DeviceProfileBuilder(
         videoCodecsProfiles = videoCodecs.entries.associate { (k, v) -> k to v.profiles }
 
         transcodingProfiles = listOf(
+            // Use fragmented MP4 segments instead of MPEG-TS for HLS: when the server only needs to
+            // remux (e.g. audio transcode) it copies the source video codec into the segments, and
+            // ExoPlayer's TS extractor cannot demux AV1 (SampleQueueMappingException). fMP4 can.
             TranscodingProfile(
                 type = DlnaProfileType.VIDEO,
-                container = "ts",
-                videoCodec = "h264",
-                audioCodec = "mp1,mp2,mp3,aac,ac3,eac3,dts,mlp,truehd",
+                container = "mp4",
+                videoCodec = "h264,hevc,av1",
+                audioCodec = "mp1,mp2,mp3,aac,ac3,eac3,dts,mlp,truehd,opus,vorbis,flac",
                 protocol = MediaStreamProtocol.HLS,
                 conditions = emptyList(),
             ),
